@@ -27,6 +27,16 @@ const WsContext = createContext<WsContextValue | null>(null);
 
 const WS_URL = import.meta.env.VITE_WS_URL ?? 'ws://localhost:3000/ws';
 
+let _idCounter = 0;
+function uid(): string {
+  // crypto.randomUUID requires a secure context (HTTPS/localhost); fall back
+  // to a monotonic counter + timestamp when serving over plain HTTP on LAN.
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${(++_idCounter).toString(36)}`;
+}
+
 export function WsProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -39,7 +49,7 @@ export function WsProvider({ children }: { children: ReactNode }) {
         case 'text_chunk': {
           const { content, done } = msg.payload;
           if (pendingIdRef.current === null) {
-            const id = crypto.randomUUID();
+            const id = uid();
             pendingIdRef.current = id;
             setMessages(prev => [
               ...prev,
@@ -62,7 +72,7 @@ export function WsProvider({ children }: { children: ReactNode }) {
           setMessages(prev => [
             ...prev,
             {
-              id: crypto.randomUUID(),
+              id: uid(),
               role: 'system',
               content: `Calling tool: ${msg.payload.name}`,
             },
@@ -72,7 +82,7 @@ export function WsProvider({ children }: { children: ReactNode }) {
           setMessages(prev => [
             ...prev,
             {
-              id: crypto.randomUUID(),
+              id: uid(),
               role: 'system',
               content: `${msg.payload.name} → ${msg.payload.result}`,
             },
@@ -82,7 +92,7 @@ export function WsProvider({ children }: { children: ReactNode }) {
           setMessages(prev => [
             ...prev,
             {
-              id: crypto.randomUUID(),
+              id: uid(),
               role: 'system',
               content: `Error [${msg.payload.code}]: ${msg.payload.message}`,
             },
@@ -105,7 +115,7 @@ export function WsProvider({ children }: { children: ReactNode }) {
     clientRef.current?.send(msg);
     setMessages(prev => [
       ...prev,
-      { id: crypto.randomUUID(), role: 'user', content },
+      { id: uid(), role: 'user', content },
     ]);
   }, []);
 
