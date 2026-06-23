@@ -1,15 +1,17 @@
 import { useState, type FormEvent, type KeyboardEvent, type ChangeEvent } from 'react';
 import { useWs } from '../context/ws';
+import { VoiceButton } from './VoiceButton';
 
 export function InputBar() {
   const { sendMessage, status } = useWs();
   const [value, setValue] = useState('');
+  const [voiceResponse, setVoiceResponse] = useState(false);
   const connected = status === 'connected';
 
   function submit() {
     const trimmed = value.trim();
     if (!trimmed || !connected) return;
-    sendMessage(trimmed);
+    sendMessage(trimmed, voiceResponse);
     setValue('');
   }
 
@@ -32,23 +34,35 @@ export function InputBar() {
   }
 
   return (
-    <form className="input-bar" onSubmit={handleSubmit}>
-      <textarea
-        className="input-bar__textarea"
-        value={value}
-        onChange={handleChange}
-        onKeyDown={handleKeyDown}
-        placeholder={connected ? 'Message Astra…' : 'Waiting for connection…'}
-        rows={1}
-        disabled={!connected}
-      />
-      <button
-        className="input-bar__send"
-        type="submit"
-        disabled={!connected || !value.trim()}
-      >
-        Send
-      </button>
-    </form>
+    <div className="input-bar">
+      <VoiceButton />
+      <form className="input-bar__form" onSubmit={handleSubmit}>
+        <textarea
+          className="input-bar__textarea"
+          value={value}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          placeholder={connected ? 'Message Astra…' : 'Waiting for connection…'}
+          rows={1}
+          disabled={!connected}
+        />
+        <button
+          type="button"
+          className={`input-bar__voice-toggle${voiceResponse ? ' input-bar__voice-toggle--on' : ''}`}
+          onClick={() => setVoiceResponse(v => !v)}
+          title={voiceResponse ? 'Voice response on' : 'Voice response off'}
+          disabled={!connected}
+        >
+          Voice
+        </button>
+        <button
+          className="input-bar__send"
+          type="submit"
+          disabled={!connected || !value.trim()}
+        >
+          Send
+        </button>
+      </form>
+    </div>
   );
 }

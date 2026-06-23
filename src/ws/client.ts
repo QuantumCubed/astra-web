@@ -4,6 +4,7 @@ export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'er
 
 type Callbacks = {
   onMessage: (msg: ServerMessage) => void;
+  onBinaryMessage: (data: ArrayBuffer) => void;
   onStatusChange: (status: ConnectionStatus) => void;
 };
 
@@ -37,13 +38,24 @@ export class WsClient {
     }
   }
 
+  sendBinary(data: Uint8Array): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(data);
+    }
+  }
+
   private open(): void {
     this.callbacks.onStatusChange('connecting');
     const ws = new WebSocket(this.url);
+    ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => this.callbacks.onStatusChange('connected');
 
     ws.onmessage = (event) => {
+      if (event.data instanceof ArrayBuffer) {
+        this.callbacks.onBinaryMessage(event.data);
+        return;
+      }
       try {
         const msg = JSON.parse(event.data as string) as ServerMessage;
         this.callbacks.onMessage(msg);

@@ -158,6 +158,13 @@ body {
   border-top: 1px solid var(--border);
 }
 
+.input-bar__form {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
 .input-bar__textarea {
   flex: 1;
   background: var(--bg);
@@ -208,4 +215,99 @@ body {
 .input-bar__send:disabled {
   opacity: 0.35;
   cursor: not-allowed;
+}
+
+.input-bar__voice-toggle {
+  height: 40px;
+  padding: 0 12px;
+  background: var(--bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.input-bar__voice-toggle--on {
+  background: #1a1530;
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.input-bar__voice-toggle:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* ── Voice button ────────────────────────────────── */
+
+.voice-btn {
+  height: 40px;
+  width: 60px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+}
+
+.voice-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.voice-btn--recording {
+  background: #2d1212;
+  border-color: #f44336;
+  color: #f44336;
+  animation: pulse-border 1s ease-in-out infinite;
+}
+
+.voice-btn--processing,
+.voice-btn--playing {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@keyframes pulse-border {
+  0%, 100% { border-color: #f44336; }
+  50%       { border-color: #7a1010; }
+}
+
+/* ── Speaking indicator ──────────────────────────── */
+
+.message--speaking .message__content {
+  border-color: var(--accent);
+}
+
+.speaking-wave {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.speaking-wave span {
+  display: inline-block;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  animation: wave-bar 0.7s ease-in-out infinite;
+}
+
+.speaking-wave span:nth-child(1) { height: 6px;  animation-delay: 0s; }
+.speaking-wave span:nth-child(2) { height: 10px; animation-delay: 0.12s; }
+.speaking-wave span:nth-child(3) { height: 6px;  animation-delay: 0.24s; }
+
+@keyframes wave-bar {
+  0%, 100% { opacity: 0.4; transform: scaleY(0.6); }
+  50%       { opacity: 1;   transform: scaleY(1); }
 }
