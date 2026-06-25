@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { WsClient, type ConnectionStatus } from '../ws/client';
 import type { ClientMessage, ServerMessage } from '../types/protocol';
+import { startTtsStream, enqueueChunk, endTtsStream } from '../audio/playback';
 
 export type ChatMessage = {
   id: string;
@@ -17,18 +18,13 @@ export type ChatMessage = {
   pending?: boolean;
 };
 
-export type TtsAudio = { buffer: ArrayBuffer; sampleRate: number };
-
 type WsContextValue = {
   status: ConnectionStatus;
   messages: ChatMessage[];
   sendMessage: (content: string, voiceResponse?: boolean) => void;
   sendBinary: (data: Uint8Array) => void;
   sendAudioEnd: () => void;
-  ttsAudio: TtsAudio | null;
-  consumeTtsAudio: () => void;
   speakingId: string | null;
-  clearSpeakingId: () => void;
 };
 
 const WsContext = createContext<WsContextValue | null>(null);
@@ -48,59 +44,51 @@ function uid(): string {
 export function WsProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [ttsAudio, setTtsAudio] = useState<TtsAudio | null>(null);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const clientRef = useRef<WsClient | null>(null);
 
   // Normal streaming state (non-voice requests).
   const pendingIdRef = useRef<string | null>(null);
 
-  // Voice-response buffering: text is held until tts_end so text and audio
-  // reveal in the same React render (simultaneous reveal).
+  // Voice-response state. For voice replies the transcript is NOT streamed from
+  // text_chunk; instead each sentence is revealed in lockstep with its audio, driven by
+  // `tts_sentence` markers scheduled on the audio clock (see handleBinaryMessage).
+  // text_chunk is still accumulated as a fallback for the no-audio / error cases.
   const expectingTtsRef = useRef(false);
   const ttsTextRef = useRef('');
-  const bufferedMsgIdRef = useRef<string | null>(null);
-
-  // Accumulate binary frames; server sends one frame per TTS response but
-  // the WebSocket layer could fragment it in principle.
-  const ttsBufferRef = useRef<ArrayBuffer[]>([]);
-
-  // Flush buffered text into the placeholder message without starting audio.
-  // Used as a safety valve when audio fails or an error arrives mid-stream.
-  const flushBufferedText = useRef<(() => void) | null>(null);
+  const voiceMsgIdRef = useRef<string | null>(null);
+  const ttsSampleRateRef = useRef(0);
+  const pendingSentenceRef = useRef<string | null>(null);
 
   useEffect(() => {
-    flushBufferedText.current = () => {
-      if (!expectingTtsRef.current || bufferedMsgIdRef.current === null) return;
-      const id = bufferedMsgIdRef.current;
-      const text = ttsTextRef.current;
-      expectingTtsRef.current = false;
-      ttsTextRef.current = '';
-      bufferedMsgIdRef.current = null;
+    function appendSentence(id: string, text: string) {
       setMessages(prev =>
-        prev.map(m => m.id === id ? { ...m, content: text, pending: false } : m),
+        prev.map(m =>
+          m.id === id
+            ? { ...m, content: m.content === '' ? text : `${m.content} ${text}` }
+            : m,
+        ),
       );
-    };
-  });
+    }
 
-  useEffect(() => {
     function handleMessage(msg: ServerMessage) {
       switch (msg.type) {
         case 'text_chunk': {
           const { content, done } = msg.payload;
 
+          // Voice mode: keep the text only as a fallback; the visible transcript is
+          // driven by tts_sentence markers in sync with the audio. Show an empty
+          // pending bubble early so the user sees Astra "thinking".
           if (expectingTtsRef.current) {
-            // Buffering mode: accumulate without revealing yet.
-            if (bufferedMsgIdRef.current === null) {
+            if (voiceMsgIdRef.current === null) {
               const id = uid();
-              bufferedMsgIdRef.current = id;
+              voiceMsgIdRef.current = id;
               setMessages(prev => [
                 ...prev,
                 { id, role: 'assistant', content: '', pending: true },
               ]);
             }
             ttsTextRef.current += content;
-            // If TTS never arrives (shouldn't happen), flush on error instead.
             break;
           }
 
@@ -133,32 +121,45 @@ export function WsProvider({ children }: { children: ReactNode }) {
           ]);
           break;
 
+        case 'tts_start': {
+          ttsSampleRateRef.current = msg.payload.sample_rate;
+          startTtsStream(msg.payload.sample_rate);
+          // Reuse the "thinking" bubble if text_chunk already created one, else make it.
+          const id = voiceMsgIdRef.current ?? uid();
+          voiceMsgIdRef.current = id;
+          setSpeakingId(id);
+          setMessages(prev =>
+            prev.some(m => m.id === id)
+              ? prev
+              : [...prev, { id, role: 'assistant', content: '', pending: true }],
+          );
+          break;
+        }
+
+        case 'tts_sentence':
+          // Hold this sentence's text; it's revealed when its first audio chunk plays.
+          pendingSentenceRef.current = msg.payload.text;
+          break;
+
         case 'tts_end': {
-          const parts = ttsBufferRef.current;
-          if (parts.length === 0) break;
-          const total = parts.reduce((n, b) => n + b.byteLength, 0);
-          const merged = new Uint8Array(total);
-          let offset = 0;
-          for (const part of parts) {
-            merged.set(new Uint8Array(part), offset);
-            offset += part.byteLength;
-          }
-          ttsBufferRef.current = [];
-
-          const id = bufferedMsgIdRef.current;
-          const text = ttsTextRef.current;
+          const id = voiceMsgIdRef.current;
           expectingTtsRef.current = false;
-          ttsTextRef.current = '';
-          bufferedMsgIdRef.current = null;
-
-          // Reveal buffered text and start audio in the same render.
+          // Drop the speaking indicator once the last queued chunk finishes playing.
+          endTtsStream(() => setSpeakingId(null));
           if (id !== null) {
-            setSpeakingId(id);
-            setMessages(prev =>
-              prev.map(m => m.id === id ? { ...m, content: text, pending: false } : m),
-            );
+            // Markers are revealing text in sync with audio; just clear the cursor.
+            setMessages(prev => prev.map(m => (m.id === id ? { ...m, pending: false } : m)));
+          } else if (ttsTextRef.current) {
+            // No audio was produced — fall back to showing the buffered text.
+            const text = ttsTextRef.current;
+            setMessages(prev => [
+              ...prev,
+              { id: uid(), role: 'assistant', content: text, pending: false },
+            ]);
           }
-          setTtsAudio({ buffer: merged.buffer, sampleRate: msg.payload.sample_rate });
+          ttsTextRef.current = '';
+          voiceMsgIdRef.current = null;
+          pendingSentenceRef.current = null;
           break;
         }
 
@@ -176,19 +177,42 @@ export function WsProvider({ children }: { children: ReactNode }) {
           ]);
           break;
 
-        case 'error':
-          // If TTS was expected, reveal whatever text arrived so it isn't lost.
-          flushBufferedText.current?.();
+        case 'error': {
+          // Reveal whatever text we buffered so it isn't lost, then show the error.
+          const id = voiceMsgIdRef.current;
+          if (id !== null && ttsTextRef.current) {
+            const text = ttsTextRef.current;
+            setMessages(prev =>
+              prev.map(m => (m.id === id ? { ...m, content: text, pending: false } : m)),
+            );
+          }
+          expectingTtsRef.current = false;
+          ttsTextRef.current = '';
+          voiceMsgIdRef.current = null;
+          pendingSentenceRef.current = null;
+          setSpeakingId(null);
           setMessages(prev => [
             ...prev,
             { id: uid(), role: 'system', content: `Error [${msg.payload.code}]: ${msg.payload.message}` },
           ]);
           break;
+        }
       }
     }
 
+    // Each binary frame is a PCM chunk. Schedule it gapless on the audio clock; if it's
+    // the first chunk of a new sentence, reveal that sentence's transcript exactly when
+    // the chunk starts playing (delayMs from now), keeping text and speech in sync.
     function handleBinaryMessage(data: ArrayBuffer) {
-      ttsBufferRef.current.push(data);
+      const rate = ttsSampleRateRef.current;
+      if (rate === 0) return; // no tts_start seen yet
+      const delayMs = enqueueChunk(data, rate);
+      const sentence = pendingSentenceRef.current;
+      const id = voiceMsgIdRef.current;
+      if (sentence !== null && id !== null) {
+        pendingSentenceRef.current = null;
+        window.setTimeout(() => appendSentence(id, sentence), delayMs);
+      }
     }
 
     const client = new WsClient(WS_URL, {
@@ -208,7 +232,8 @@ export function WsProvider({ children }: { children: ReactNode }) {
     if (voiceResponse) {
       expectingTtsRef.current = true;
       ttsTextRef.current = '';
-      bufferedMsgIdRef.current = null;
+      voiceMsgIdRef.current = null;
+      pendingSentenceRef.current = null;
     }
   }, []);
 
@@ -221,19 +246,12 @@ export function WsProvider({ children }: { children: ReactNode }) {
     clientRef.current?.send(msg);
     expectingTtsRef.current = true;
     ttsTextRef.current = '';
-    bufferedMsgIdRef.current = null;
-  }, []);
-
-  const consumeTtsAudio = useCallback(() => {
-    setTtsAudio(null);
-  }, []);
-
-  const clearSpeakingId = useCallback(() => {
-    setSpeakingId(null);
+    voiceMsgIdRef.current = null;
+    pendingSentenceRef.current = null;
   }, []);
 
   return (
-    <WsContext.Provider value={{ status, messages, sendMessage, sendBinary, sendAudioEnd, ttsAudio, consumeTtsAudio, speakingId, clearSpeakingId }}>
+    <WsContext.Provider value={{ status, messages, sendMessage, sendBinary, sendAudioEnd, speakingId }}>
       {children}
     </WsContext.Provider>
   );

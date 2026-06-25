@@ -7,6 +7,8 @@ export type ClientMessage =
 export type ServerMessage =
   | { request_id?: string; type: 'text_chunk';   payload: { content: string; done: boolean } }
   | { request_id?: string; type: 'transcript';   payload: { text: string } }
+  | { request_id?: string; type: 'tts_start';    payload: { sample_rate: number; channels: number; format: string } }
+  | { request_id?: string; type: 'tts_sentence'; payload: { text: string } }
   | { request_id?: string; type: 'tts_end'; payload: { sample_rate: number; channels: number; format: string } }
   | { request_id?: string; type: 'tool_call';    payload: { name: string; args: unknown } }
   | { request_id?: string; type: 'tool_result';  payload: { name: string; result: string } }

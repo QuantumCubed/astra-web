@@ -1,24 +1,23 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useWs } from '../context/ws';
 import { startCapture, type CaptureHandle } from '../audio/capture';
-import { playF32Audio } from '../audio/playback';
 
 export type AudioState = 'idle' | 'recording' | 'processing' | 'playing';
 
 export function useAudio() {
-  const { sendBinary, sendAudioEnd, ttsAudio, consumeTtsAudio, clearSpeakingId } = useWs();
+  const { sendBinary, sendAudioEnd, speakingId } = useWs();
   const [audioState, setAudioState] = useState<AudioState>('idle');
   const captureRef = useRef<CaptureHandle | null>(null);
 
+  // TTS playback now streams chunk-by-chunk inside the WS context; mirror the speaking
+  // indicator here so the UI can reflect a "playing" state.
   useEffect(() => {
-    if (ttsAudio === null) return;
-    setAudioState('playing');
-    consumeTtsAudio();
-    playF32Audio(ttsAudio.buffer, ttsAudio.sampleRate, () => {
-      clearSpeakingId();
-      setAudioState('idle');
-    });
-  }, [ttsAudio, consumeTtsAudio, clearSpeakingId]);
+    if (speakingId !== null) {
+      setAudioState('playing');
+    } else {
+      setAudioState(s => (s === 'playing' ? 'idle' : s));
+    }
+  }, [speakingId]);
 
   const startRecording = useCallback(async () => {
     if (audioState !== 'idle') return;
